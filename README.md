@@ -1,3 +1,5 @@
-# Savejet / CacheLens
+# CacheLens
 
-Standalone Chrome cache page viewer for macOS Catalina 10.15.7. Application source and Mac build workflow are on the cachelens-app branch.
+Standalone Chrome cache viewer for macOS Catalina 10.15.7. Search cached pages and click to preview offline.
+
+Download the app ZIP from the latest successful [Mac build](../../actions/workflows/cachelens-mac.yml). See [instructions](CacheLens/README.md).
