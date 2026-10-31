@@ -1,0 +1,39 @@
+name: Build CacheLens for Windows
+on:
+  push:
+    branches: [cachelens-windows]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: CacheLens-Windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build standalone EXE
+        run: dotnet publish -c Release -r win-x64 --self-contained true -o dist
+      - name: Test cache and history readers
+        run: ./dist/CacheLens.exe --self-test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install preview test browser
+        run: |
+          npm install --no-save playwright
+          npx playwright install chromium
+      - name: Verify app and offline page rendering
+        run: node smoke.cjs
+      - name: Package download
+        run: Compress-Archive -Path dist/CacheLens.exe,README.md -DestinationPath dist/CacheLens-Windows.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CacheLens-Windows
+          path: |
+            CacheLens-Windows/dist/CacheLens-Windows.zip
+            CacheLens-Windows/dist/CacheLens-preview.png
