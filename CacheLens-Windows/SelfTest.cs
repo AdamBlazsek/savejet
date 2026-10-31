@@ -71,7 +71,7 @@ public static class SelfTest
                 using (var compressor = new BrotliStream(brotli, CompressionLevel.Fastest, true)) compressor.Write(gzip.ToArray());
                 Assert(Encoding.UTF8.GetString(CacheReader.Decode(brotli.ToArray(), "gzip, br")) == "stacked", "stacked encoding");
             }
-            var plain = Path.Combine(root, "plain_0");
+            var plain = Path.Combine(root, "Default", "Cache", "Cache_Data", "plain_0");
             WriteSimple(plain, "https://example.test/plain", Encoding.UTF8.GetBytes("<html>Already decoded</html>"), "Content-Type: text/html\0Content-Encoding: gzip");
             Assert(Encoding.UTF8.GetString(CacheReader.Body(CacheReader.Simple(plain, "test"))).Contains("Already decoded"), "already decoded HTML");
             WriteSimple(plain, "https://example.test/broken", [1,2,3,4], "Content-Type: text/html\0Content-Encoding: gzip");
@@ -112,3 +112,4 @@ public static class SelfTest
         if (page.Url != "https://legacy.test/page" || Encoding.UTF8.GetString(CacheReader.Body(page)) != "<html>Legacy page</html>") throw new Exception("Legacy reader failed");
     }
 }
+
