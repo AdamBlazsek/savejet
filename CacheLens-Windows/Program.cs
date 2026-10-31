@@ -65,7 +65,7 @@ app.MapGet(token + "/search", (string? q, string? kind, string? after, string? b
         if (DateTime.TryParse(after, out var a)) found = found.Where(p => p.Date?.ToLocalTime().Date >= a.Date);
         if (DateTime.TryParse(before, out var b)) found = found.Where(p => p.Date?.ToLocalTime().Date <= b.Date);
         var list = found.ToList();
-        return Results.Json(new { count = list.Count, results = list.Take(300).Select(p => new { p.Id, p.Url, p.Title, p.Profile, p.Date, p.Kind, available = p.Kind == "cache" || assets.TryGetValue(p.Url, out var cached) && CacheReader.IsHtml(cached) }) });
+        return Results.Json(new { count = list.Count, results = list.Take(300).Select(p => new { p.Id, p.Url, p.Title, p.Profile, p.Date, p.Kind, p.Problem, available = p.Kind == "cache" ? p.Problem.Length == 0 : assets.TryGetValue(p.Url, out var cached) && CacheReader.IsHtml(cached) && cached.Problem.Length == 0 }) });
     }
 });
 app.MapGet(token + "/preview/{id}", (string id, HttpContext ctx) =>
@@ -80,7 +80,7 @@ app.MapGet(token + "/preview/{id}", (string id, HttpContext ctx) =>
     ctx.Response.Headers["Content-Security-Policy"] = "sandbox; default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'";
     if (p == null) return Results.Content("<h2>History record only</h2><p>Chrome remembers this address, but a saved page body was not found. Use Open original or Check archive to look for another copy.</p>", "text/html");
     try { return Results.Content(Preview.Html(Encoding.UTF8.GetString(CacheReader.Body(p)), new Uri(p.Url), token), "text/html"); }
-    catch { return Results.Content("<h2>Preview unavailable</h2><p>This entry may have changed or be incomplete. Quit Chrome and rescan.</p>", "text/html"); }
+    catch (Exception ex) { return Results.Content("<h2>Preview unavailable</h2><p>" + WebUtility.HtmlEncode(ex.Message) + "</p><p>This entry may have changed or be incomplete. Quit Chrome and rescan. Other entries remain usable.</p>", "text/html"); }
 });
 app.MapGet(token + "/asset", (string? url, HttpContext ctx) =>
 {

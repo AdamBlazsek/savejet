@@ -58,9 +58,44 @@ public static class SelfTest
             bool rejected = false; try { CacheReader.Simple(bad, "test"); } catch { rejected = true; }
             Assert(rejected, "malformed entry rejected");
             TestLegacy(Path.Combine(root, "Legacy"));
+            TestLiveHistory(Path.Combine(root, "Live"));
+            using (var raw = new MemoryStream())
+            {
+                using (var deflater = new DeflateStream(raw, CompressionLevel.Fastest, true)) deflater.Write(Encoding.UTF8.GetBytes("raw deflate"));
+                Assert(Encoding.UTF8.GetString(CacheReader.Decode(raw.ToArray(), "deflate")) == "raw deflate", "raw deflate fallback");
+            }
+            using (var gzip = new MemoryStream())
+            {
+                using (var compressor = new GZipStream(gzip, CompressionLevel.Fastest, true)) compressor.Write(Encoding.UTF8.GetBytes("stacked"));
+                using var brotli = new MemoryStream();
+                using (var compressor = new BrotliStream(brotli, CompressionLevel.Fastest, true)) compressor.Write(gzip.ToArray());
+                Assert(Encoding.UTF8.GetString(CacheReader.Decode(brotli.ToArray(), "gzip, br")) == "stacked", "stacked encoding");
+            }
+            var plain = Path.Combine(root, "plain_0");
+            WriteSimple(plain, "https://example.test/plain", Encoding.UTF8.GetBytes("<html>Already decoded</html>"), "Content-Type: text/html\0Content-Encoding: gzip");
+            Assert(Encoding.UTF8.GetString(CacheReader.Body(CacheReader.Simple(plain, "test"))).Contains("Already decoded"), "already decoded HTML");
+            WriteSimple(plain, "https://example.test/broken", [1,2,3,4], "Content-Type: text/html\0Content-Encoding: gzip");
+            var brokenScan = CacheReader.Scan(root);
+            Assert(brokenScan.Pages.Any(p => p.Url == "https://example.test/broken" && p.Problem.Length > 0), "per-page decoding diagnostic");
+            Assert(brokenScan.Pages.Any(p => p.Kind == "history"), "bad page does not stop history");
             Console.WriteLine("PASS: Simple and legacy cache, SHA footer, history without cutoff, title and text search, gzip/deflate/Brotli, malformed entry, offline rewrite");
+            Console.WriteLine("PASS: open WAL database snapshot includes committed visits, excludes uncommitted visits, preserves source files; raw deflate, stacked encodings, already-decoded HTML, per-entry errors");
         }
         finally { Directory.Delete(Path.GetDirectoryName(root)!, true); }
+    }
+    static void TestLiveHistory(string folder)
+    {
+        Directory.CreateDirectory(folder);
+        var file = Path.Combine(folder, "History");
+        using var writer = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = file, Pooling = false }.ToString()); writer.Open();
+        using var command = writer.CreateCommand();
+        command.CommandText = "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE urls(url TEXT,title TEXT,last_visit_time INTEGER); INSERT INTO urls VALUES ('https://wal.test/committed','WAL visit',0); BEGIN IMMEDIATE; INSERT INTO urls VALUES ('https://wal.test/uncommitted','Not committed',0);";
+        command.ExecuteNonQuery();
+        var before = System.IO.File.ReadAllBytes(file); var walBefore = System.IO.File.ReadAllBytes(file + "-wal");
+        var found = HistoryReader.Read(file, "Live");
+        if (found.Count != 1 || found[0].Url != "https://wal.test/committed") throw new Exception("Live WAL snapshot returned wrong rows");
+        if (!before.SequenceEqual(System.IO.File.ReadAllBytes(file)) || !walBefore.SequenceEqual(System.IO.File.ReadAllBytes(file + "-wal"))) throw new Exception("Source database was changed");
+        command.CommandText = "ROLLBACK"; command.ExecuteNonQuery();
     }
     static void TestLegacy(string root)
     {

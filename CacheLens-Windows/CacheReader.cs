@@ -7,7 +7,7 @@ using Microsoft.Data.Sqlite;
 namespace CacheLens;
 
 public sealed record Page(string Id, string Url, string Title, string Profile, DateTime? Date,
-    string Kind, string Mime, string Encoding, string File, long Offset, int Length, string SearchText = "");
+    string Kind, string Mime, string Encoding, string File, long Offset, int Length, string SearchText = "", string Problem = "");
 public sealed record ScanResult(List<Page> Pages, int Resources, int Skipped, List<string> Notices);
 
 public static class CacheReader
@@ -117,24 +117,44 @@ public static class CacheReader
     }
     public static byte[] Decode(byte[] data, string encoding)
     {
-        if (encoding is "" or "identity") return data;
+        var encodings = encoding.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        foreach (var part in encodings.Reverse())
+        {
+            if (part == "identity") continue;
+            data = DecodeOne(data, part);
+        }
+        return data;
+    }
+    static byte[] DecodeOne(byte[] data, string encoding, bool rawDeflate = false)
+    {
         using var input = new MemoryStream(data);
         using Stream decoder = encoding switch
         {
             "gzip" => new GZipStream(input, CompressionMode.Decompress),
+            "deflate" when rawDeflate => new DeflateStream(input, CompressionMode.Decompress),
             "deflate" => new ZLibStream(input, CompressionMode.Decompress),
             "br" => new BrotliStream(input, CompressionMode.Decompress),
             _ => throw new InvalidDataException("Unsupported compression: " + encoding)
         };
         using var output = new MemoryStream(); var buffer = new byte[65536]; int n;
-        while ((n = decoder.Read(buffer)) != 0)
+        try
         {
-            if (output.Length + n > MaxSize) throw new InvalidDataException("Decoded entry exceeds 64 MB");
-            output.Write(buffer, 0, n);
+            while ((n = decoder.Read(buffer)) != 0)
+            {
+                if (output.Length + n > MaxSize) throw new InvalidDataException("Decoded entry exceeds 64 MB");
+                output.Write(buffer, 0, n);
+            }
         }
+        catch (InvalidDataException) when (encoding == "deflate" && !rawDeflate) { return DecodeOne(data, encoding, true); }
         return output.ToArray();
     }
-    public static byte[] Body(Page p) => Decode(Read(p.File, p.Offset, p.Length), p.Encoding);
+    public static byte[] Body(Page p)
+    {
+        var raw = Read(p.File, p.Offset, p.Length);
+        try { return Decode(raw, p.Encoding); }
+        catch (InvalidDataException) when (IsHtml(p) && Regex.IsMatch(Encoding.UTF8.GetString(raw.AsSpan(0, Math.Min(raw.Length, 512))), @"^\s*(?:\uFEFF)?\s*(?:<!doctype\s+html\b|<html\b)", RegexOptions.IgnoreCase))
+        { return raw; } // Some stored responses retain encoding headers alongside an already decoded HTML body.
+    }
     static IEnumerable<string> Files(string root, string pattern)
     {
         if (!Directory.Exists(root)) return [];
@@ -160,25 +180,13 @@ public static class CacheReader
             {
                 try
                 {
-                    using var db = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = history, Mode = SqliteOpenMode.ReadOnly, Pooling = false, DefaultTimeout = 2 }.ToString());
-                    db.Open();
-                    using var command = db.CreateCommand();
-                    command.CommandText = "SELECT url, title, last_visit_time FROM urls ORDER BY last_visit_time DESC";
-                    using var reader = command.ExecuteReader();
-                    while (reader.Read())
-                    {
-                        var url = reader.GetString(0);
-                        if (!url.StartsWith("http://") && !url.StartsWith("https://")) continue;
-                        var ticks = reader.GetInt64(2);
-                        DateTime? date = null;
-                        try { date = DateTime.FromFileTimeUtc(checked(ticks * 10)); } catch { }
-                        pages.Add(new(Guid.NewGuid().ToString("N"), url, reader.IsDBNull(1) ? "" : reader.GetString(1), name, date, "history", "", "", "", 0, 0));
-                    }
+                    pages.AddRange(HistoryReader.Read(history, name));
                 }
-                catch { notices.Add(name + ": history could not be read. Quit Chrome and rescan; a locked database or a copied profile missing its WAL file can cause this."); }
+                catch (Exception ex) { notices.Add(name + ": " + ex.Message + " Fully exit Chrome, including background processes, and rescan. For a backup, include its matching History-wal file if present."); }
             }
         }
         int resources = pages.Count(p => p.Kind == "cache");
+        int unreadable = 0;
         for (int i = 0; i < pages.Count; i++)
         {
             var p = pages[i];
@@ -190,8 +198,14 @@ public static class CacheReader
                 var title = System.Net.WebUtility.HtmlDecode(Regex.Match(text, @"<title\b[^>]*>([\s\S]*?)</title>", RegexOptions.IgnoreCase).Groups[1].Value);
                 pages[i] = p with { Title = title, SearchText = text };
             }
-            catch { notices.Add("A cached page could not be decoded; its entry may be incomplete or have changed."); }
+            catch (Exception ex)
+            {
+                unreadable++;
+                pages[i] = p with { Problem = ex.Message };
+                if (unreadable <= 3) notices.Add("Unreadable cached page: " + p.Url + " — " + ex.Message);
+            }
         }
+        if (unreadable > 0) notices.Add($"{unreadable} cached page(s) could not be decoded. Other pages and history remain searchable; this does not mean the entire scan failed.");
         return new(pages.OrderByDescending(p => p.Date).ToList(), resources, skipped, notices.Distinct().ToList());
     }
     public static bool IsHtml(Page p) => p.Mime.Contains("html", StringComparison.OrdinalIgnoreCase);
