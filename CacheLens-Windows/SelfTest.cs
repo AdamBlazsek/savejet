@@ -91,10 +91,10 @@ public static class SelfTest
         using var command = writer.CreateCommand();
         command.CommandText = "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE urls(url TEXT,title TEXT,last_visit_time INTEGER); INSERT INTO urls VALUES ('https://wal.test/committed','WAL visit',0); BEGIN IMMEDIATE; INSERT INTO urls VALUES ('https://wal.test/uncommitted','Not committed',0);";
         command.ExecuteNonQuery();
-        var before = System.IO.File.ReadAllBytes(file); var walBefore = System.IO.File.ReadAllBytes(file + "-wal");
+        var before = CacheReader.Read(file); var walBefore = CacheReader.Read(file + "-wal");
         var found = HistoryReader.Read(file, "Live");
         if (found.Count != 1 || found[0].Url != "https://wal.test/committed") throw new Exception("Live WAL snapshot returned wrong rows");
-        if (!before.SequenceEqual(System.IO.File.ReadAllBytes(file)) || !walBefore.SequenceEqual(System.IO.File.ReadAllBytes(file + "-wal"))) throw new Exception("Source database was changed");
+        if (!before.SequenceEqual(CacheReader.Read(file)) || !walBefore.SequenceEqual(CacheReader.Read(file + "-wal"))) throw new Exception("Source database was changed");
         command.CommandText = "ROLLBACK"; command.ExecuteNonQuery();
     }
     static void TestLegacy(string root)
