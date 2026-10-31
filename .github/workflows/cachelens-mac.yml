@@ -1,0 +1,21 @@
+name: Build CacheLens for Catalina
+on:
+  push:
+    branches: [cachelens-app]
+  pull_request:
+    paths: ['CacheLens/**', '.github/workflows/cachelens-mac.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build standalone Intel app and run parser tests
+        run: bash CacheLens/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CacheLens-macOS-10.15
+          path: CacheLens/build/CacheLens-macOS-10.15.zip
+          retention-days: 30
